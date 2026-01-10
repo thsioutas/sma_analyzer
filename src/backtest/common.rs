@@ -1,13 +1,100 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use chrono::{DateTime, Utc};
 use rayon::prelude::*;
+use serde::Deserialize;
 
 use crate::{
-    data::Sample,
+    data::{CsvType, Sample},
     indicators::{AtrFilter, RegimeFilter, sma::SmaConfig},
     signal::{BreakoutConfig, FilterConfig, PullbackConfig, StrategyConfig},
 };
+
+#[derive(Deserialize)]
+pub struct ConfigSetup {
+    /// Type of the CSV file
+    pub csv_type: CsvType,
+
+    /// Path to the CSV file (timestamp,price)pub
+    pub input: PathBuf,
+
+    /// Resample input to <sample_hours> hours (i.e. 1h, 4h, 6h, ...)
+    pub sample_hours: i64,
+
+    /// Initial cash for the backtest
+    pub initial_cash: f64,
+
+    /// Fraction of *available cash* to allocate on each BUY/SELL signal (0.0–1.0)
+    pub buy_sell_fraction: f64,
+}
+
+#[derive(Deserialize)]
+pub struct ConfigSingleRun {
+    #[serde(flatten)]
+    pub setup: ConfigSetup,
+
+    /// Whether ATR gate filter should be used
+    pub atr_enabled: bool,
+
+    /// Whether regime filter should be used
+    pub regime_enabled: bool,
+
+    /// How many candles to lookback for a breakdown
+    /// Do not set to not use breakout patterns
+    pub breakout_lookback: Option<usize>,
+
+    /// Do not set to not use pullback patterns
+    pub pullback_bounce_tolerance_pct: Option<f64>,
+
+    /// Do not set to not use pullback patterns
+    pub pullback_rejection_tolerance_pct: Option<f64>,
+
+    /// Whether sma crossover signals should be used
+    pub enable_crossovers: bool,
+
+    /// Whether bias_only signals should be used
+    pub enable_bias_only: bool,
+
+    /// SMA short window
+    pub sma_short_window: usize,
+
+    /// SMA long window
+    pub sma_long_window: usize,
+
+    /// Whether price confirmation is required
+    pub require_price_confirmation: bool,
+
+    /// Whether trend filter is required
+    pub require_trend_filter: bool,
+}
+
+#[derive(Deserialize)]
+pub struct ConfigSweep {
+    #[serde(flatten)]
+    pub setup: ConfigSetup,
+
+    /// Min breakout lookback window (e.g. 3)
+    pub min_lookback: usize,
+
+    /// Max breakout lookback window (e.g. 10)
+    pub max_lookback: usize,
+
+    /// Min pullback tolerances (e.g. 0.001)
+    pub min_pullback_pct: f64,
+
+    /// Max pullback tolerances (e.g. 0.01)
+    pub max_pullback_pct: f64,
+
+    /// Maximum fraction for buy/sell (e.g. 0.5 = at most 50%)
+    pub max_buy_sell_fraction: f64,
+
+    /// Number of steps for buy/sell fraction (0–1).
+    /// E.g. 100 => 0.01, 0.02, ..., 1.00
+    pub buy_sell_frac_steps: usize,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Signal {

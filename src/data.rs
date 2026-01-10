@@ -7,10 +7,30 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CsvType {
+    CryptoLogger,
+    KrakenOhlcvt,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct PriceRow {
     pub timestamp: String,
     pub price: f64,
+}
+
+/// Kraken OHLCVT row format: timestamp, open, high, low, close, volume, trades
+/// No header row in Kraken CSV files
+#[derive(Debug, Deserialize)]
+pub struct KrakenOhlcvtRow {
+    pub timestamp: i64,
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub volume: f64,
+    pub trades: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -19,7 +39,14 @@ pub struct Sample {
     pub price: f64,
 }
 
-pub fn get_samples_from_input_file(input: &PathBuf) -> Result<Vec<Sample>> {
+pub fn get_samples(input: &PathBuf, csv_type: CsvType) -> Result<Vec<Sample>> {
+    match csv_type {
+        CsvType::CryptoLogger => get_samples_from_input_file(input),
+        CsvType::KrakenOhlcvt => get_samples_from_kraken_ohlcvt(input),
+    }
+}
+
+fn get_samples_from_input_file(input: &PathBuf) -> Result<Vec<Sample>> {
     let file =
         File::open(input).with_context(|| format!("failed to open input file: {:?}", input))?;
 
@@ -35,6 +62,32 @@ pub fn get_samples_from_input_file(input: &PathBuf) -> Result<Vec<Sample>> {
         samples.push(Sample {
             ts,
             price: row.price,
+        });
+    }
+    Ok(samples)
+}
+
+/// Read samples from a Kraken OHLCVT CSV file.
+/// Kraken format: timestamp (unix), open, high, low, close, volume, trades
+/// Uses the close price as the sample price.
+fn get_samples_from_kraken_ohlcvt(input: &PathBuf) -> Result<Vec<Sample>> {
+    let file =
+        File::open(input).with_context(|| format!("failed to open input file: {:?}", input))?;
+
+    let mut rdr = ReaderBuilder::new().has_headers(false).from_reader(file);
+
+    let mut samples: Vec<Sample> = Vec::new();
+
+    for result in rdr.deserialize::<KrakenOhlcvtRow>() {
+        let row: KrakenOhlcvtRow =
+            result.with_context(|| "failed to deserialize Kraken CSV row")?;
+        let ts = Utc
+            .timestamp_opt(row.timestamp, 0)
+            .single()
+            .with_context(|| format!("failed to parse unix timestamp: {}", row.timestamp))?;
+        samples.push(Sample {
+            ts,
+            price: row.close,
         });
     }
     Ok(samples)
@@ -196,5 +249,34 @@ mod tests {
         assert_eq!(out.len(), 3);
         assert_eq!(out[0].ts, s4.ts); // original timestamp of last tick in that hour
         assert_eq!(out[0].price, 104.0); // close price
+    }
+
+    #[test]
+    fn test_get_samples_from_kraken_ohlcvt() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // Create a temporary CSV file with Kraken OHLCVT format
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "1623942000,42.0,42.0,33.7,33.95,3293.36201464,214").unwrap();
+        writeln!(file, "1623945600,33.9,33.92,33.3,33.37,2438.65345165,193").unwrap();
+        writeln!(file, "1623949200,33.44,33.44,32.2,32.22,1586.84243114,142").unwrap();
+
+        let path = file.path().to_path_buf();
+        let samples = get_samples_from_kraken_ohlcvt(&path).unwrap();
+
+        assert_eq!(samples.len(), 3);
+
+        // First sample: timestamp 1623942000 = 2021-06-17 13:00:00 UTC, close = 33.95
+        assert_eq!(samples[0].ts.timestamp(), 1623942000);
+        assert!((samples[0].price - 33.95).abs() < 0.001);
+
+        // Second sample: timestamp 1623945600, close = 33.37
+        assert_eq!(samples[1].ts.timestamp(), 1623945600);
+        assert!((samples[1].price - 33.37).abs() < 0.001);
+
+        // Third sample: timestamp 1623949200, close = 32.22
+        assert_eq!(samples[2].ts.timestamp(), 1623949200);
+        assert!((samples[2].price - 32.22).abs() < 0.001);
     }
 }

@@ -6,11 +6,11 @@ use serde::Deserialize;
 
 use trade_signal::{
     backtest::{
-        find_best_strategy, generate_backtest_sweep_jobs, generate_pullback_pairs,
+        ConfigSweep, find_best_strategy, generate_backtest_sweep_jobs, generate_pullback_pairs,
         generate_strategies,
         spot::{SpotBacktester, buy_and_hold_equity, print_summary},
     },
-    data::{get_samples_from_input_file, resample_to_hourly},
+    data::{get_samples, resample_to_hourly},
 };
 
 #[derive(Debug, Parser)]
@@ -24,33 +24,11 @@ struct Args {
 /// and report the best configuration.
 #[derive(Deserialize)]
 struct Config {
-    /// Path to CSV with raw timestamp,price data
-    input: PathBuf,
-
-    /// Initial cash for the backtest
-    initial_cash: f64,
+    #[serde(flatten)]
+    common: ConfigSweep,
 
     /// Initial coin holdings (e.g. if you already own some SOL)
     initial_coin: f64,
-
-    /// Min breakout lookback window (e.g. 3)
-    min_lookback: usize,
-
-    /// Max breakout lookback window (e.g. 10)
-    max_lookback: usize,
-
-    /// Min pullback tolerances (e.g. 0.001)
-    min_pullback_pct: f64,
-
-    /// Max pullback tolerances (e.g. 0.01)
-    max_pullback_pct: f64,
-
-    /// Maximum fraction for buy/sell (e.g. 0.5 = at most 50%)
-    max_buy_sell_fraction: f64,
-
-    /// Number of steps for buy/sell fraction (0–1).
-    /// E.g. 100 => 0.01, 0.02, ..., 1.00
-    buy_sell_frac_steps: usize,
 
     /// Trading fee in basis points (e.g. 10 = 0.10%)
     fee_bps: f64,
@@ -68,7 +46,7 @@ fn main() -> Result<()> {
         .build()?
         .try_deserialize()?;
 
-    let samples = get_samples_from_input_file(&config.input).expect("failed to load input CSV");
+    let samples = get_samples(&config.common.setup.input, config.common.setup.csv_type).expect("failed to load input CSV");
     let hourly = resample_to_hourly(&samples);
 
     println!(
@@ -78,20 +56,20 @@ fn main() -> Result<()> {
     );
 
     let pullback_pairs =
-        generate_pullback_pairs(config.min_pullback_pct, config.max_pullback_pct, 0.001);
+        generate_pullback_pairs(config.common.min_pullback_pct, config.common.max_pullback_pct, 0.001);
 
-    let strategies = generate_strategies(config.min_lookback, config.max_lookback, pullback_pairs);
+    let strategies = generate_strategies(config.common.min_lookback, config.common.max_lookback, pullback_pairs);
 
-    let buy_sell_frac_steps = config.buy_sell_frac_steps;
+    let buy_sell_frac_steps = config.common.buy_sell_frac_steps;
 
     let jobs = generate_backtest_sweep_jobs(strategies, buy_sell_frac_steps);
 
     let best = find_best_strategy(
         jobs,
-        config.max_buy_sell_fraction,
+        config.common.max_buy_sell_fraction,
         buy_sell_frac_steps,
         &hourly,
-        || SpotBacktester::new(config.initial_cash, config.initial_coin, config.fee_bps),
+        || SpotBacktester::new(config.common.setup.initial_cash, config.initial_coin, config.fee_bps),
     );
 
     println!();
@@ -108,7 +86,7 @@ fn main() -> Result<()> {
         print_summary(&result);
 
         if let Some(hold_equity) =
-            buy_and_hold_equity(&hourly, config.initial_cash, config.initial_coin)
+            buy_and_hold_equity(&hourly, config.common.setup.initial_cash, config.initial_coin)
         {
             println!();
             println!("Buy & hold final equity: {:.2}", hold_equity);

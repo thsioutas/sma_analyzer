@@ -2,71 +2,21 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use serde::Deserialize;
-use trade_signal::indicators::sma::SmaConfig;
-use trade_signal::indicators::{AtrFilter, RegimeFilter};
-use trade_signal::signal::{BreakoutConfig, FilterConfig, PullbackConfig, StrategyConfig};
 
-use trade_signal::backtest::position::{
-    NdjsonLogger, PositionBacktester, buy_and_hold_equity, print_summary,
+use trade_signal::{
+    backtest::{
+        Backtester, Candidate, ConfigSingleRun, position::{NdjsonLogger, PositionBacktester, buy_and_hold_equity, print_summary}
+    },
+    data::{get_samples, resample_to_n_hours},
+    indicators::{AtrFilter, RegimeFilter, sma::SmaConfig},
+    signal::{BreakoutConfig, FilterConfig, PullbackConfig, StrategyConfig},
 };
-use trade_signal::backtest::{Backtester, Candidate};
-use trade_signal::data::{get_samples_from_input_file, resample_to_n_hours};
 
 #[derive(Debug, Parser)]
 struct Args {
     /// config-file path
     #[arg(long)]
     config: PathBuf,
-}
-
-#[derive(Deserialize)]
-struct Config {
-    /// Path to the CSV file (timestamp,price)pub
-    input: PathBuf,
-
-    /// Resample input to <sample_hours> hours (i.e. 1h, 4h, 6h, ...)
-    sample_hours: i64,
-
-    /// Initial cash for the backtest
-    initial_cash: f64,
-
-    /// Fraction of *available cash* to allocate on each position (0.0–1.0)
-    buy_fraction: f64,
-
-    /// Whether ATR gate filter should be used
-    atr_enabled: bool,
-
-    /// Whether regime filter should be used
-    regime_enabled: bool,
-
-    /// How many candles to lookback for a breakdown
-    /// Do not set to not use breakout patterns
-    breakout_lookback: Option<usize>,
-
-    /// Do not set to not use pullback patterns
-    pullback_bounce_tolerance_pct: Option<f64>,
-
-    /// Do not set to not use pullback patterns
-    pullback_rejection_tolerance_pct: Option<f64>,
-
-    /// Whether sma crossover signals should be used
-    enable_crossovers: bool,
-
-    /// Whether bias_only signals should be used
-    enable_bias_only: bool,
-
-    /// SMA short window
-    sma_short_window: usize,
-
-    /// SMA long window
-    sma_long_window: usize,
-
-    /// Whether price confirmation is required
-    require_price_confirmation: bool,
-
-    /// Whether trend filter is required
-    require_trend_filter: bool,
 }
 
 fn main() -> Result<()> {
@@ -76,26 +26,26 @@ fn main() -> Result<()> {
         .into_os_string()
         .into_string()
         .expect("Failed to translate config file path into string");
-    let config: Config = config::Config::builder()
+    let config: ConfigSingleRun = config::Config::builder()
         .add_source(config::File::with_name(&config_path))
         .build()?
         .try_deserialize()?;
 
-    let samples = get_samples_from_input_file(&config.input)
-        .with_context(|| format!("failed to load samples from {:?}", config.input))?;
+    let samples = get_samples(&config.setup.input, config.setup.csv_type)
+        .with_context(|| format!("failed to load samples from {:?}", config.setup.input))?;
 
     if samples.is_empty() {
         println!("No data found in CSV.");
         return Ok(());
     }
 
-    let resampled = resample_to_n_hours(&samples, config.sample_hours);
+    let resampled = resample_to_n_hours(&samples, config.setup.sample_hours);
 
     println!(
         "Loaded {} raw points, {} {}h-candles after resampling.",
         samples.len(),
         resampled.len(),
-        config.sample_hours,
+        config.setup.sample_hours,
     );
 
     let pullbacks = match (
@@ -151,21 +101,21 @@ fn main() -> Result<()> {
     };
 
     let candidate = Candidate {
-        buy_sell_fraction: config.buy_fraction,
+        buy_sell_fraction: config.setup.buy_sell_fraction,
         strategy,
     };
 
-    println!("Initial cash:      {}", config.initial_cash);
-    println!("Buy fraction:      {}", config.buy_fraction);
+    println!("Initial cash:      {}", config.setup.initial_cash);
+    println!("Buy fraction:      {}", config.setup.buy_sell_fraction);
     println!("Strategy:          {}", strategy.describe_config());
 
     let log_path = log_path_unix("position_backtest");
     let position_logger = NdjsonLogger::new(log_path);
-    let backtester = PositionBacktester::with_logger(config.initial_cash, position_logger);
+    let backtester = PositionBacktester::with_logger(config.setup.initial_cash, position_logger);
     let result = backtester.run_backtest(&resampled, &candidate).unwrap();
 
     print_summary(&result);
-    if let Some(hold_equity) = buy_and_hold_equity(&resampled, config.initial_cash) {
+    if let Some(hold_equity) = buy_and_hold_equity(&resampled, config.setup.initial_cash) {
         println!();
         println!("Buy & hold final equity: {:.2}", hold_equity);
     }

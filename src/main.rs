@@ -1,6 +1,8 @@
 use anyhow::Result;
 use clap::Parser;
+
 use trade_signal::{
+    data::{CsvType, get_samples},
     indicators::sma::SmaConfig,
     signal::{BreakoutConfig, FilterConfig, PullbackConfig, StrategyConfig},
 };
@@ -12,7 +14,7 @@ const PULLBACK_TOLERANCE_PCT: f64 = 0.003;
 
 #[derive(Debug, Parser)]
 struct Args {
-    /// Path to the CSV file (timestamp,price)
+    /// Path to the CSV file
     #[arg(long)]
     input: PathBuf,
 }
@@ -21,7 +23,7 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     // Load raw samples from CSV
-    let samples = trade_signal::data::get_samples_from_input_file(&args.input)?;
+    let samples = get_samples(&args.input, CsvType::CryptoLogger)?;
     if samples.is_empty() {
         println!("No data found in CSV.");
         return Ok(());
