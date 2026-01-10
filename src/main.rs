@@ -4,13 +4,12 @@ use clap::Parser;
 use trade_signal::{
     data::{CsvType, get_samples},
     indicators::sma::SmaConfig,
-    signal::{BreakoutConfig, FilterConfig, PullbackConfig, StrategyConfig},
+    signal::{BreakoutConfig, FilterConfig, StrategyConfig},
 };
 
 use std::path::PathBuf;
 
-const BREAKDOWN_LOOKBACK: usize = 5;
-const PULLBACK_TOLERANCE_PCT: f64 = 0.003;
+const BREAKDOWN_LOOKBACK: usize = 3;
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -43,10 +42,16 @@ fn main() -> Result<()> {
 
     // Extract prices and compute SMAs
     let prices: Vec<f64> = hourly.iter().map(|s| s.price).collect();
-    let sma_config = SmaConfig::sma_20_50();
+    let sma_config = SmaConfig {
+        short_window: 10,
+        long_window: 100,
+    };
     let Some(smas) = trade_signal::indicators::compute_smas(&prices, sma_config) else {
         println!(
-            "Not enough data: need at least 51 hourly candles for SMA20/50 logic, got {}.",
+            "Not enough data: need at least {} hourly candles for SMA{}/{} logic, got {}.",
+            sma_config.long_window + 1,
+            sma_config.short_window,
+            sma_config.long_window,
             prices.len()
         );
         return Ok(());
@@ -56,12 +61,9 @@ fn main() -> Result<()> {
         breakouts: Some(BreakoutConfig {
             breakout_lookback: BREAKDOWN_LOOKBACK,
         }),
-        enable_bias_only: true,
+        enable_bias_only: false,
         enable_crossovers: true,
-        pullbacks: Some(PullbackConfig {
-            bounce_tolerance_pct: PULLBACK_TOLERANCE_PCT,
-            reject_tolerance_pct: PULLBACK_TOLERANCE_PCT,
-        }),
+        pullbacks: None,
         sma_config,
         filters: FilterConfig {
             atr: None,
